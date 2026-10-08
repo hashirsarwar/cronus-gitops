@@ -1,0 +1,32 @@
+{{- /*
+A PodDisruptionBudget, but only where one can be satisfied.
+
+Rendered from the replica count rather than from a flag of its own, so that it cannot be switched on by
+mistake in an environment with nothing to spare. A budget that keeps one replica available on a
+Deployment with one replica is not a protection, it is a guarantee that no node can ever be drained:
+every eviction of that pod would violate it, `kubectl drain` reports the violation and waits, and an AKS
+node upgrade or a node reboot stalls until somebody deletes the budget. Dev runs one replica on purpose,
+so dev renders no budget and a drain there is free to move the pod.
+
+Expressed as maxUnavailable rather than minAvailable so that it does not have to be revisited as the
+replica count grows. `minAvailable: 1` reads well at two replicas and means something else entirely at
+six, where it would allow five of them to go at once; `maxUnavailable: 1` says the same thing at any
+count.
+
+The selector is the Deployment's, so the budget covers the pod that serves traffic and not the migration
+or seed Jobs. Those are single-run and must never be held back by a budget — waiting for one to finish
+is the point of the PreSync hook, not a disruption to avoid.
+*/}}
+{{- if gt (int .Values.replicaCount) 1 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    {{- include "cronus-ordering-service.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "cronus-ordering-service.serverSelector" . | nindent 6 }}
+{{- end }}

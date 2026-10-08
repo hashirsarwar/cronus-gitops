@@ -1,0 +1,88 @@
+# Keep environment-specific overrides in values-<environment>.yaml, including production.
+
+image:
+  repository: acrcronusnonprod.azurecr.io/cronus-delivery-service
+  # The tag of the build being deployed. Set per environment to the full Git commit SHA that CI
+  # pushed. Left empty here, and required by the template, so that a deployment can never fall back
+  # to a moving tag such as `latest`.
+  tag: ""
+  # An optional digest to pull by instead of the tag, which is what production uses: a digest cannot
+  # be repointed, while a tag is a label a push can move. Left empty here, so dev and staging pull
+  # by tag exactly as they did before this value existed. See the helper that renders the reference.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# Dev uses one replica; staging and production override the count.
+# Render PDBs only above one replica so voluntary node drains cannot be blocked indefinitely.
+replicaCount: 1
+
+serviceAccount:
+  # The ServiceAccount Argo created for this workload. It carries azure.workload.identity/client-id,
+  # and the identity that references is the PostgreSQL role this service authenticates as.
+  name: cronus-delivery-service
+
+database:
+  # Environment-specific, so required by the template rather than defaulted here.
+  host: ""
+  name: ""
+  # The name of the connection string. It becomes the ConnectionStrings__<name> environment variable,
+  # which is the key the application reads.
+  connectionStringName: CronusDelivery
+  # The role the service authenticates as. It may read and write rows and may not change the schema.
+  username: ""
+
+# Keep existing capacity until replacement pods are Ready; reserve room for one surge pod.
+# Percentage maxUnavailable rounds down and maxSurge rounds up; check small replica counts.
+# PDBs do not govern rollouts. See README.md, The rolling update.
+deployment:
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+# Prefer even zone and host placement with ScheduleAnyway rather than blocking replicas.
+# Enable both now so added nodes can be used without a template change; neither has priority by list order.
+# See README.md, Topology spread, for capacity limits and selector scope.
+topologySpread:
+  zone:
+    enabled: true
+  hostname:
+    enabled: true
+
+telemetry:
+  # Set the real connection string per environment; empty disables telemetry.
+  # Malformed placeholders can prevent start-up. Read application_insights_connection_strings from Terraform outputs.
+  connectionString: ""
+
+migration:
+  enabled: true
+  # The ServiceAccount carrying the identity allowed to change the schema. Kept separate from the
+  # service's: a pod that could assume this identity would collapse a boundary the database enforces.
+  serviceAccountName: cronus-delivery-migrations
+  # The role the migration job authenticates as. It may create and alter tables.
+  username: ""
+
+# The pod-level security context, shared by the Deployment and the migration job so the two cannot
+# drift apart.
+podSecurityContext:
+  # Pin .NET's numeric UID/GID 1654: kubelet cannot verify runAsNonRoot from the image's named USER app.
+  # Recheck this identity when changing the base image.
+  runAsNonRoot: true
+  runAsUser: 1654
+  runAsGroup: 1654
+  seccompProfile:
+    type: RuntimeDefault
+
+# Requests only for CPU: a CPU limit would throttle the process during a burst the node could
+# comfortably absorb, and the request is what the scheduler needs. Memory is limited so that a leak
+# restarts the pod instead of degrading the node it shares.
+resources:
+  requests:
+    cpu: 100m
+    # Above the 192Mi this service actually settles at rather than a round number: measured at
+    # 168-173Mi across dev and staging, so the previous 128Mi request was below steady state and the
+    # scheduler was placing pods on a figure that was not true. A request is a scheduling promise, and
+    # one below real usage means the node can be overcommitted without anything saying so. The limit is
+    # what protects the node; this only has to be honest.
+    memory: 192Mi
+  limits:
+    memory: 384Mi

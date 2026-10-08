@@ -1,0 +1,7 @@
+apiVersion: v2
+name: cronus-ordering-service
+description: The Cronus ordering service — restaurants, menus, carts and orders.
+type: application
+# The version of this chart's templates. The application version is the image tag, which is the Git
+# commit SHA of the build, so there is deliberately no appVersion here to fall out of step with it.
+version: 0.1.0

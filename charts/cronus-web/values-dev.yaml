@@ -1,0 +1,27 @@
+# The dev environment for the web application.
+#
+# There is little to say here: the bundle is the same everywhere, so the environment-specific inputs
+# are which build to run and which Application Insights resource the browser reports to.
+
+# One replica, inherited from values.yaml rather than restated here, and that is the cost decision for
+# this environment: three extra replicas across three workloads buys availability a dev environment does
+# not need. What it does keep is everything the chart sets: the rollout policy from the chart's
+# values.yaml, maxUnavailable: 0 with maxSurge: 1, so a deploy still replaces the pod without a gap in
+# service even at one replica; and both topology spread constraints, which cost nothing here because
+# there is nothing to spread. What it cannot survive is the loss of the node, which is why staging is
+# the environment that demonstrates availability.
+#
+# Neither the rollout policy nor the spread constraints are restated in this file. Dev and staging use
+# the same values for both, so they are stated once in the chart's values.yaml; a production values file
+# is where they would diverge, and `deployment.rollingUpdate` and `topologySpread` are the two fields it
+# would set.
+
+image:
+  # Use the full commit SHA published by CI so the deployed build is traceable.
+  # The template requires an explicit tag and cannot silently fall back to latest.
+  tag: "73be6893f2ac19d54b36ad958a89947d6c2b1e4c"
+
+telemetry:
+  # Use the real web_dev connection string from nonprod Terraform outputs.
+  # An empty value disables telemetry; a malformed placeholder can prevent start-up.
+  connectionString: "InstrumentationKey=dc027ab9-9f96-4bd5-af75-6628cd502b95;IngestionEndpoint=https://uksouth-1.in.applicationinsights.azure.com/;LiveEndpoint=https://uksouth.livediagnostics.monitor.azure.com/;ApplicationId=d7e738bb-7770-4a64-a920-9fcd0878eac4"

@@ -1,0 +1,147 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    {{- include "cronus-web.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+
+  # Require both rollout values so incomplete overrides fail rendering.
+  # PDBs govern evictions, not Deployment rollouts; see README.md, Resilience.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ required "deployment.rollingUpdate.maxUnavailable is required: set it in values.yaml or the environment's values file" .Values.deployment.rollingUpdate.maxUnavailable }}
+      maxSurge: {{ required "deployment.rollingUpdate.maxSurge is required: set it in values.yaml or the environment's values file" .Values.deployment.rollingUpdate.maxSurge }}
+
+  # Require stable readiness before retiring the old pod, reducing exposure to early failures.
+  minReadySeconds: 10
+  selector:
+    matchLabels:
+      {{- include "cronus-web.serverSelector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cronus-web.serverSelector" . | nindent 8 }}
+        # The web container has no Azure authentication needs, so do not project a workload identity token.
+      annotations:
+        # ConfigMap subPath mounts do not update in place; hash the config to roll pods when it changes.
+        checksum/runtime-config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      # No ServiceAccount of its own: the runtime ServiceAccounts in this namespace belong to the two
+      # backends. This workload never calls the Kubernetes API, so it runs as the namespace default
+      # with no token mounted at all.
+      automountServiceAccountToken: false
+      # Allow the bounded 20s preStop drain to finish within the 30s grace period.
+      # nginx exits after graceful quit, without waiting for SIGTERM.
+      terminationGracePeriodSeconds: 30
+
+      # Prefer spreading over zones and hosts without leaving replicas Pending when capacity is limited.
+      # Count only this release's server pods; list order does not give zone spreading priority.
+      # See README.md, Topology spread.
+      {{- $selector := include "cronus-web.serverSelector" . }}
+      {{- if or .Values.topologySpread.zone.enabled .Values.topologySpread.hostname.enabled }}
+      topologySpreadConstraints:
+        {{- if .Values.topologySpread.zone.enabled }}
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- $selector | nindent 14 }}
+        {{- end }}
+        {{- if .Values.topologySpread.hostname.enabled }}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- $selector | nindent 14 }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        # Pin nginx's numeric UID/GID so kubelet can verify runAsNonRoot and base-image changes cannot switch users.
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: {{ .Chart.Name }}
+          image: {{ include "cronus-web.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # The Gateway routes /api directly to ordering; nginx needs only the mounted runtime config file.
+          volumeMounts:
+            # The only path nginx writes to. See the readOnlyRootFilesystem note below.
+            - name: tmp
+              mountPath: /tmp
+            # Mounted over the single file rather than the directory, so the bundle beside it — and
+            # the two health endpoints nginx answers itself — are untouched.
+            - name: runtime-config
+              mountPath: /usr/share/nginx/html/config.js
+              subPath: config.js
+              readOnly: true
+          # nginx handles SIGTERM as a fast shutdown, so send graceful quit and wait for its pid file to disappear.
+          # Bound the wait to leave grace-period headroom; uid 101 can signal its own master without extra privileges.
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    nginx -s quit
+                    i=0
+                    while [ -f /tmp/nginx.pid ]; do
+                      i=$((i + 1))
+                      [ "$i" -gt 20 ] && exit 0
+                      sleep 1
+                    done
+          # Gate strict probes on startup success, with the startup budget defined in one place.
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 30
+          # No initialDelaySeconds, here or on readiness: the startup probe has to pass first.
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Check nginx and its bundle, not ordering, so the UI can display backend failures.
+          # The 5s interval limits removal and rejoin latency.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            # nginx writes its pid and temporary files under mounted /tmp and sends logs to stdout/stderr.
+            # No cache or template rendering needs root-filesystem writes; see README.md, Pod security.
+            readOnlyRootFilesystem: true
+      volumes:
+        # Disk-backed rather than `medium: Memory`, which would charge these files against the
+        # container's memory limit and make a full temp directory indistinguishable from a leak.
+        - name: tmp
+          emptyDir: {}
+        - name: runtime-config
+          configMap:
+            name: {{ include "cronus-web.runtimeConfigName" . }}

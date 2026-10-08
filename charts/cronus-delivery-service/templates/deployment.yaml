@@ -1,0 +1,141 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    {{- include "cronus-delivery-service.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+
+  # Require both rollout values so incomplete overrides fail rendering.
+  # PDBs govern evictions, not Deployment rollouts; see README.md, Resilience.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ required "deployment.rollingUpdate.maxUnavailable is required: set it in values.yaml or the environment's values file" .Values.deployment.rollingUpdate.maxUnavailable }}
+      maxSurge: {{ required "deployment.rollingUpdate.maxSurge is required: set it in values.yaml or the environment's values file" .Values.deployment.rollingUpdate.maxSurge }}
+
+  # Require stable readiness before retiring the old pod, reducing exposure to early failures.
+  minReadySeconds: 10
+  selector:
+    matchLabels:
+      {{- include "cronus-delivery-service.serverSelector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cronus-delivery-service.serverSelector" . | nindent 8 }}
+        # Opts this pod into the workload identity webhook, which projects the identity named on the
+        # ServiceAccount into the container as a token file. Without the label the pod starts without
+        # that file and cannot authenticate to PostgreSQL. It belongs on the pod template, not on the
+        # Deployment.
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      # Allow 5s for routing propagation, the default 30s .NET shutdown drain, and 10s margin before SIGKILL.
+      terminationGracePeriodSeconds: 45
+
+      # Prefer spreading over zones and hosts without leaving replicas Pending when capacity is limited.
+      # Count only this release's server pods; list order does not give zone spreading priority.
+      # See README.md, Topology spread.
+      {{- $selector := include "cronus-delivery-service.serverSelector" . }}
+      {{- if or .Values.topologySpread.zone.enabled .Values.topologySpread.hostname.enabled }}
+      topologySpreadConstraints:
+        {{- if .Values.topologySpread.zone.enabled }}
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- $selector | nindent 14 }}
+        {{- end }}
+        {{- if .Values.topologySpread.hostname.enabled }}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- $selector | nindent 14 }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: {{ include "cronus-delivery-service.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            # Pin Production so deployed replicas cannot run Development-only database initialization.
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            # The whole database configuration. It carries no password: the credential is an Entra
+            # access token obtained from the workload identity above.
+            - name: ConnectionStrings__{{ .Values.database.connectionStringName }}
+              value: {{ include "cronus-delivery-service.connectionString" .Values.database | quote }}
+            # Direct runtime sockets and exporter offline storage to writable /tmp.
+            # The exporter otherwise tries read-only /var/tmp before falling back.
+            - name: TMPDIR
+              value: /tmp
+            {{- with .Values.telemetry.connectionString }}
+            # Where this service's traces, metrics and logs are exported. Set per environment, because
+            # each environment has its own Application Insights resource. Absent means the application
+            # runs without telemetry, which it is written to support rather than a fault: it reports
+            # which of the two it is doing in its first log line.
+            - name: APPLICATIONINSIGHTS_CONNECTION_STRING
+              value: {{ . | quote }}
+            {{- end }}
+          volumeMounts:
+            # The only writable path in the container, and the only path it writes to. See the TMPDIR
+            # note above and the readOnlyRootFilesystem note below.
+            - name: tmp
+              mountPath: /tmp
+          # Delay SIGTERM while endpoint removal propagates so late-routed requests still reach a listening Kestrel.
+          lifecycle:
+            preStop:
+              # The native sleep action rather than `sleep 5` through a shell: it needs neither a shell nor
+              # a sleep binary in the image, and the grace period is charged for it either way.
+              sleep:
+                seconds: 5
+          # Gate liveness and readiness on startup success so slow starts cannot trigger restart loops.
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 30
+          # No initialDelaySeconds, here or on readiness: the startup probe has to pass first, which is the
+          # same guarantee stated once instead of three times.
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Remove database-disconnected pods from traffic without restarting them.
+          # The 5s interval limits removal and rejoin latency.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            # Only runtime sockets and exporter offline storage need writes; TMPDIR directs both to mounted /tmp.
+            readOnlyRootFilesystem: true
+      volumes:
+        # Disk-backed rather than `medium: Memory`, which would charge these files against the
+        # container's memory limit and make a full temp directory indistinguishable from a leak.
+        - name: tmp
+          emptyDir: {}

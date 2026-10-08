@@ -1,0 +1,25 @@
+# Enforce Restricted for Cronus workloads; the managed Gateway lives separately because it omits seccomp.
+# Leave the profile version unpinned to follow cluster upgrades; the earlier sync wave creates the namespace first.
+# See README.md, Admission, for the Gateway exception.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cronus-dev
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  labels:
+    app.kubernetes.io/part-of: cronus
+    app.kubernetes.io/managed-by: argocd
+    # The environment this namespace is, and the only label in this repository that another object
+    # selects by. dev's Gateway admits routes from namespaces carrying `cronus.io/environment: dev`, so
+    # this one line is what lets dev's HTTPRoute attach to dev's Gateway — and what keeps staging's
+    # route off it. It is stated here rather than left to the Gateway so that what may reach this
+    # environment is visible in the environment's own file.
+    #
+    # The same label is put on every object the charts render, derived from the namespace they land in,
+    # so nothing in an environment can disagree about which environment it is.
+    cronus.io/environment: dev
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

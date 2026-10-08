@@ -1,0 +1,34 @@
+# Keep Argo's repository and destination authority in manually applied bootstrap, outside its own reconciliation.
+# Allow only production workloads and the Gateway namespace on this cluster; widening requires reinstalling bootstrap.
+# Disjoint ApplicationSet paths keep this control plane separate from nonprod.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: cronus-prod
+  namespace: argocd
+spec:
+  description: The Cronus production environment. Managed from bootstrap/prod/, not by Argo.
+
+  # Match the ApplicationSet's SSH repoURL exactly; Argo compares URL strings for source authorization.
+  sourceRepos:
+    - git@github.com:hashirsarwar/cronus-gitops.git
+
+  # Allow only the named namespaces on Argo's own cluster; kube-system is intentionally excluded.
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: cronus-prod
+
+    # Keep managed Gateway pods outside Restricted workload namespaces; only the platform set targets this namespace.
+    - server: https://kubernetes.default.svc
+      namespace: cronus-gateway
+
+  # destinations does not authorize cluster-scoped objects; explicitly allow the two Namespace names.
+  # A kind-only or wildcard grant would let an Application create additional namespaces.
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+      name: cronus-prod
+
+    - group: ""
+      kind: Namespace
+      name: cronus-gateway

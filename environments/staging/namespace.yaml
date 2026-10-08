@@ -1,0 +1,40 @@
+# The staging environment's boundary in the cluster, and the same shape and the same posture as
+# cronus-dev: both enforce the Restricted profile, and nothing Cronus creates fails it — the three
+# Deployments, the two migration Jobs and the seed Job, checked against this cluster's own admission
+# rather than by eye.
+#
+# The one thing that could not live in a namespace like this — the managed Gateway and the data plane
+# AKS generates for it — is not in either environment. It has a namespace of its own, which is the one
+# place in this repository that audits and warns without enforcing, and platform/gateway/foundation/namespace.yaml
+# explains why.
+#
+# `enforce-version: latest` names the version of the profile, and is what an unset label means anyway:
+# the profile as the running API server ships it, so the bar rises with the cluster instead of being
+# frozen at whatever was current when this file was written. Audit and warn leave it unset, and the
+# default does the same thing there; it is written out for enforce because the choice is worth seeing.
+#
+# Separate namespace rather than separate cluster: staging exists to catch what dev did not,
+# so it needs its own objects, its own identities and its own database, but it does not need
+# its own control plane. That is a decision worth revisiting if staging ever has to differ
+# from dev in a way namespace isolation cannot express, such as a different Kubernetes
+# version or a different ingress class.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cronus-staging
+  annotations:
+    # See environments/dev/namespace.yaml: the namespace is created before the ServiceAccounts
+    # that live in it, stated rather than left to Argo's built-in kind ordering.
+    argocd.argoproj.io/sync-wave: "-1"
+  labels:
+    app.kubernetes.io/part-of: cronus
+    app.kubernetes.io/managed-by: argocd
+    # The environment this namespace is, and the label that admits its Route to its Gateway: the listener
+    # on `cronus-staging-gateway` selects namespaces carrying this label, and dev's listener selects
+    # `dev`. That one line per namespace is the whole of the isolation between the two environments'
+    # public addresses, so it is stated here rather than left to the Gateway.
+    cronus.io/environment: staging
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

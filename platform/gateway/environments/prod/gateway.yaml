@@ -1,0 +1,25 @@
+# HTTP only, with no hostname or certificate; production Terraform admits port 80.
+# Admit only Routes from production-labelled namespaces and expose no delivery backend.
+# See README.md for the public ingress boundary and planned DNS/TLS design.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: cronus-prod-gateway
+  labels:
+    app.kubernetes.io/part-of: cronus
+    app.kubernetes.io/managed-by: argocd
+    # Identify this Gateway; allowedRoutes below checks namespace labels, not this object's label.
+    cronus.io/environment: prod
+spec:
+  gatewayClassName: approuting-istio
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      # Restrict attachment to production-labelled namespaces; All would admit Routes from other namespaces.
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              cronus.io/environment: prod

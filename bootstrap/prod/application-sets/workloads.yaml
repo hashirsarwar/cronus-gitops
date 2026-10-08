@@ -1,0 +1,109 @@
+# Render charts per environment; install this bootstrap manually rather than through Argo.
+# Keep component names explicit so chart-directory renames cannot rename Applications. See README.md, Layout.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cronus-prod-workloads
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  # Preserve resources when generated Applications disappear or are renamed.
+  # They become unmanaged until the Application is restored; deleting them must be a separate decision.
+  syncPolicy:
+    preserveResourcesOnDeletion: true
+
+  generators:
+    - matrix:
+        generators:
+          # Production, named rather than matched. One element, and the only thing that would change it is
+          # a second production cluster — which would be a second installation with its own bootstrap
+          # directory, not a second element here.
+          - git:
+              repoURL: git@github.com:hashirsarwar/cronus-gitops.git
+              revision: main
+              directories:
+                - path: environments/prod
+
+          # The charts, and the same four as every other environment. The list is where each chart is bound
+          # to the component name in its Application and to the values file it is rendered with; the values
+          # file is built from the environment directory, so `values-prod.yaml` is what these read and no
+          # chart needs to know which environments exist.
+          #
+          # A chart missing from this list is a component production does not run. That is a deliberate
+          # edit and a visible one: the Application disappears, and with `preserveResourcesOnDeletion` its
+          # objects stay in the cluster rather than being deleted by the omission.
+          - list:
+              elements:
+                - app: cronus-ordering-service
+                  component: ordering-service
+                - app: cronus-delivery-service
+                  component: delivery-service
+                - app: cronus-web
+                  component: web
+                - app: cronus-network-policies
+                  component: network-policies
+
+  template:
+    metadata:
+      name: 'cronus-{{.path.basename}}-{{.component}}'
+      labels:
+        app.kubernetes.io/part-of: cronus
+        app.kubernetes.io/managed-by: argocd
+        cronus.io/environment: '{{.path.basename}}'
+    spec:
+      project: cronus-prod
+
+      source:
+        repoURL: git@github.com:hashirsarwar/cronus-gitops.git
+        targetRevision: main
+        path: 'charts/{{.app}}'
+        helm:
+          # Keep the existing Helm release name: it is part of the immutable Deployment selector.
+          # Changing it requires replacement and a rollout plan; Application renames must leave it untouched.
+          # See README.md, Renaming an Application does not touch Kubernetes.
+          releaseName: '{{.app}}-cronus-{{.path.basename}}'
+
+          valueFiles:
+            # Relative to the chart directory, which is how Argo resolves these: each environment's values
+            # sit beside the chart they configure. The chart's own values.yaml is always applied first;
+            # this overrides it.
+            - 'values-{{.path.basename}}.yaml'
+
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: 'cronus-{{.path.basename}}'
+
+      syncPolicy:
+        automated:
+          selfHeal: true
+
+          # Pruning is ON here, as it is on the nonprod workloads set, and the difference from the
+          # environment set above is what is being pruned. These Applications own a Deployment, a Service,
+          # a NetworkPolicy and a migration Job — never the Namespace, which belongs to the foundation
+          # Application. Removing a NetworkPolicy from a chart should remove it from the cluster: an allow
+          # rule that nothing removes is a security control that has quietly stopped being one, which is
+          # the argument for this setting being on and it is stronger in production than in dev.
+          #
+          # The risk this leaves — a bad edit deleting a workload — is covered by
+          # `preserveResourcesOnDeletion` above for Application-level deletions, and by the fact that
+          # nothing here is applied without a commit.
+          prune: true
+
+        # Every sync runs the PreSync migration Job again, including a self-heal caused by something
+        # unrelated, because a hook is a phase of the sync rather than a resource whose diff is compared.
+        # The job is safe to run twice: it applies whatever migrations are pending and does nothing when
+        # there are none. On production that property is what makes a self-heal harmless, and the
+        # migration is the one thing here that changes state rather than describing it.
+        retry:
+          limit: 5
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 3m
+
+        syncOptions:
+          # The namespace is created by the environment set, so this one must not try to create it and must
+          # not wait on it either.
+          - CreateNamespace=false

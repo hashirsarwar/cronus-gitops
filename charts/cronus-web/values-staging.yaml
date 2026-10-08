@@ -1,0 +1,20 @@
+# The staging environment for the web application.
+#
+# Identical to values-dev.yaml except for the image tag and the Application Insights resource,
+# because everything the application serves and everything it reaches is the same. Staging exists to
+# run a different build and to report to its own resource, so dev and staging telemetry never mix.
+
+# Two replicas support availability during rollouts and voluntary disruptions.
+# Both can still share one worker node; spreading is a preference, not node-failure protection.
+# The chart supplies rollout and topology defaults; see README.md, Resilience.
+
+replicaCount: 2
+image:
+  # Use the full commit SHA published by CI so the deployed build is traceable.
+  # The template requires an explicit tag and cannot silently fall back to latest.
+  tag: "73be6893f2ac19d54b36ad958a89947d6c2b1e4c"
+
+telemetry:
+  # Use the real web_staging connection string from nonprod Terraform outputs.
+  # An empty value disables telemetry; a malformed placeholder can prevent start-up.
+  connectionString: "InstrumentationKey=b3eb6da9-7e62-405b-9567-2e8fb82f2a56;IngestionEndpoint=https://uksouth-1.in.applicationinsights.azure.com/;LiveEndpoint=https://uksouth.livediagnostics.monitor.azure.com/;ApplicationId=1fcbcd6e-c813-4b88-9397-64813ab6ad43"

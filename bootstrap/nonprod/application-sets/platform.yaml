@@ -1,0 +1,80 @@
+# Install manually; foundation owns the Gateway namespace and policies, while each environment owns a Gateway.
+# Keep the Gateway list explicit because adding one provisions a public address. See README.md, Layout.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cronus-platform
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  generators:
+    - list:
+        elements:
+          # The namespace and the policies that belong to the namespace itself, rather than to whichever
+          # Gateway happens to sit in it. This one is not an environment — which is why it points at
+          # `foundation/` rather than at `environments/`, and why its name is not environment-first:
+          # `cronus-platform-gateway` says what it is, and a name like `cronus-gateway-foundation` would
+          # make a platform namespace look like another environment.
+          #
+          # The Application name is unchanged by the path it reads. Argo tracks objects by name, not by
+          # file, so moving a manifest between directories re-renders the same objects and changes
+          # nothing in the cluster.
+          - name: cronus-platform-gateway
+            path: platform/gateway/foundation
+            namespace: cronus-gateway
+
+          # One environment's Gateway. Named for the environment, because that is what it is: the way in
+          # from outside for exactly one environment, with a listener that admits only that
+          # environment's routes.
+          #
+          # Two entries rather than one, and that is the architecture rather than an oversight: a
+          # listener admits the routes of one environment, so "environments do not share a public
+          # address" is enforced by having two Gateways. Each is a separate load balancer with a separate
+          # Azure public IP, which is the cost of that separation and the reason a third environment is a
+          # reviewed edit here rather than a directory someone created.
+          - name: cronus-dev-gateway
+            path: platform/gateway/environments/dev
+            namespace: cronus-gateway
+
+          - name: cronus-staging-gateway
+            path: platform/gateway/environments/staging
+            namespace: cronus-gateway
+
+  template:
+    metadata:
+      # Written out in the generator rather than assembled from the path, because these Applications are
+      # genuinely different things and not instances of one template.
+      name: '{{.name}}'
+      labels:
+        app.kubernetes.io/part-of: cronus
+        app.kubernetes.io/managed-by: argocd
+    spec:
+      project: cronus-nonprod
+
+      source:
+        repoURL: git@github.com:hashirsarwar/cronus-gitops.git
+        targetRevision: main
+        path: '{{.path}}'
+        directory:
+          recurse: false
+
+      destination:
+        server: https://kubernetes.default.svc
+        # Use each generator element's namespace so the destination follows the platform object it owns.
+        namespace: '{{.namespace}}'
+
+      syncPolicy:
+        automated:
+          selfHeal: true
+
+          # Off for the same reason the environment set has it off: one of these directories contains a
+          # Namespace, and pruning a Namespace deletes everything inside it. The Gateways are protected
+          # from the other direction — a Gateway removed from git takes its Application with it, and the
+          # Application's resources finalizer is what deletes the Gateway, its Deployment and its load
+          # balancer.
+          prune: false
+
+        syncOptions:
+          - CreateNamespace=false

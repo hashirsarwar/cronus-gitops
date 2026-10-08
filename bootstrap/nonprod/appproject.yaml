@@ -1,0 +1,75 @@
+# What the Applications generated from this repository are allowed to do.
+#
+# Applied by install.sh rather than by Argo, and Argo does not read this directory at all: this
+# file is the boundary that stops an Application going somewhere it should not, so a mistake in
+# it is precisely the mistake that must not be able to propagate through the thing it constrains.
+# Recovering is `kubectl apply` with the previous version.
+#
+# The consequence is that editing this file changes nothing until install.sh is run again — a push
+# is not a deployment for anything under bootstrap/nonprod/. That is the intended trade, and it is worth
+# knowing before debugging a change that is in git but not in the cluster.
+#
+# Without a project of its own, every Application here would use Argo's built-in `default`
+# project, which permits any source repository and any destination — including `kube-system`
+# on this cluster. That is the difference this file makes: at the moment nothing but this
+# repository can be deployed, and nowhere but these three namespaces.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: cronus-nonprod
+  namespace: argocd
+spec:
+  description: The Cronus nonprod environments. Managed from bootstrap/nonprod/, not by Argo.
+
+  # The only repository an Application in this project may read manifests from. Written as
+  # the SSH URL because that is what the Applications use, and Argo matches this by the URL
+  # string it is given rather than by resolving the two to the same place — a mismatch here
+  # shows up as "repository not permitted", not as a fetch failure, which is worth knowing
+  # when reading the error.
+  sourceRepos:
+    - git@github.com:hashirsarwar/cronus-gitops.git
+
+  # Where a namespaced resource may be deployed. The two environment namespaces and the one the
+  # managed Gateway lives in, and nothing else: `kube-system` is not on the list, so no Application
+  # generated from this repository can reach it, whatever a manifest says.
+  #
+  # `cronus-gateway` is not a third environment — it holds no workload — but it is an Argo-managed
+  # namespace in this repository, which is all this list is about. platform/gateway/foundation/ explains why
+  # Gateways need one of their own.
+  #
+  # The server is the in-cluster service name, matching the ApplicationSet's own destination.
+  # Argo compares this string too, so the two have to agree exactly — `in-cluster` would be
+  # a different destination and would be refused.
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: cronus-dev
+    - server: https://kubernetes.default.svc
+      namespace: cronus-staging
+    - server: https://kubernetes.default.svc
+      namespace: cronus-gateway
+
+  # The part that is easy to miss, and the reason this file is not just the three lists
+  # above.
+  #
+  # A Kubernetes Namespace is a cluster-scoped resource, so `destinations` does not govern it
+  # at all — that list only constrains namespaced resources. Cluster-scoped resources are
+  # gated by an allow list, and the default when the list is absent is to allow none. Since
+  # the manifests in this repository create their own Namespaces, leaving this out would fail
+  # every sync with the Namespace reported as not permitted in the project.
+  #
+  # Named rather than allowing the kind outright, so the project permits creating these three
+  # namespaces and not, say, `kube-public`. The docs describe this as restricting
+  # cluster-scoped resources by name, and it is the same list the `destinations` above
+  # mirrors. A pattern such as `cronus-*` would let a new environment work without editing
+  # this file; the exact names are used instead so that both the destination and the namespace
+  # it is allowed to create have to be added deliberately.
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+      name: cronus-dev
+    - group: ""
+      kind: Namespace
+      name: cronus-staging
+    - group: ""
+      kind: Namespace
+      name: cronus-gateway

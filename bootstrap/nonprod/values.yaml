@@ -1,0 +1,31 @@
+# Values for the argo-cd chart. Only what differs from the chart's defaults is set, so the
+# file reads as a list of decisions rather than a copy of the defaults.
+#
+# The deploy key is deliberately NOT here. configs.repositories would work, but it would put
+# a private SSH key into a file that lives in git. The credential is a Secret in the cluster
+# instead, created by install.sh from a key file that is never committed.
+
+# Argo CD's bundled SSO provider. Nothing authenticates through it: there is no identity
+# provider wired up yet, so leaving it enabled would run a component that serves nothing.
+# Argo's own admin account stays enabled, which is what makes this safe — install.sh prints
+# how to read its initial password. Re-enable this when Entra ID sign-in is configured; the
+# chart's own notes warn that disabling it while admin is also off leaves no way in at all.
+dex:
+  enabled: false
+
+# Sync and health notifications to Slack, email and so on. None are configured, so this
+# would run a controller that has nowhere to send anything. Worth turning on deliberately
+# when there is somewhere for the messages to go, because a failing sync is exactly the
+# thing worth being told about.
+notifications:
+  enabled: false
+
+server:
+  service:
+    # ClusterIP is the chart's default and is stated here so that it stays a decision.
+    # The API server answers only the authorized address ranges configured in
+    # cronus-infrastructure, and the UI is reached through `kubectl port-forward` rather
+    # than by publishing it. Exposing it means deciding how, and that decision belongs
+    # with the Gateway API ingress that is now enabled on the cluster — not with a
+    # LoadBalancer service that would bypass it.
+    type: ClusterIP

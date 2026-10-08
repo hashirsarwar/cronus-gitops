@@ -1,0 +1,81 @@
+# Install manually to keep recovery independent of Argo reconciliation.
+# Keep production and nonprod generator paths disjoint; workload syncs retry until foundations exist.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cronus-environments
+  namespace: argocd
+spec:
+  # Go templating rather than the default fasttemplate, and missingkey=error so that a reference to a
+  # parameter the generator did not produce fails loudly instead of rendering an empty string. An
+  # Application pointed at an empty path syncs nothing and looks fine, which is a silent failure worth
+  # preventing.
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  generators:
+    - git:
+        # SSH rather than HTTPS because the credential is a read-only deploy key: it is scoped to this
+        # one repository, cannot reach anything else the account owns, and cannot write. The matching
+        # private half is a Secret in the cluster, created by install.sh and never committed here.
+        repoURL: git@github.com:hashirsarwar/cronus-gitops.git
+        revision: main
+        directories:
+          - path: environments/*
+          - path: environments/*/*
+            exclude: true
+          # Exclude production so this cluster cannot generate its foundation Application.
+          # The production generator names only environments/prod; keep these path lists disjoint.
+          - path: environments/prod
+            exclude: true
+
+  template:
+    metadata:
+      # The environment first, then the role this Application plays in it. Every Application this
+      # repository generates reads the same way, so `argocd app list` groups by environment and sorts
+      # predictably within one.
+      name: 'cronus-{{.path.basename}}-foundation'
+      labels:
+        app.kubernetes.io/part-of: cronus
+        app.kubernetes.io/managed-by: argocd
+        # The environment, on the Application as well as on what it deploys, so that Argo's own objects
+        # can be filtered by environment without reading their names.
+        cronus.io/environment: '{{.path.basename}}'
+    spec:
+      # The project that decides what this Application may read and where it may deploy. Argo's built-in
+      # `default` project would permit any repository and any destination, including kube-system on this
+      # cluster. The project is applied by install.sh just before this file, because an Application
+      # naming a project that does not exist cannot be created at all.
+      project: cronus-nonprod
+
+      source:
+        repoURL: git@github.com:hashirsarwar/cronus-gitops.git
+        targetRevision: main
+        path: '{{.path.path}}'
+        directory:
+          # Each environment directory is flat: the manifests in it are the environment.
+          recurse: false
+
+      destination:
+        # The cluster Argo runs in, addressed by its in-cluster service. This repository describes what
+        # runs here, so there is one destination rather than a cluster generator's list of many.
+        server: https://kubernetes.default.svc
+        # The convention described above, in one line: the directory is `dev`, the namespace is
+        # `cronus-dev`.
+        namespace: 'cronus-{{.path.basename}}'
+
+      syncPolicy:
+        automated:
+          # A drift from git is corrected rather than reported. Nothing in these directories is written
+          # by hand, so there is no legitimate local change for it to fight.
+          selfHeal: true
+
+          # Do not prune foundations: deleting a Namespace cascades to all its workloads and data.
+          # Removing objects here requires a deliberate cleanup; see README.md for Application deletion semantics.
+          prune: false
+
+        syncOptions:
+          # The Namespace is a manifest rather than something Argo creates as a side effect, so that it
+          # is visible, reviewable and labelled like everything else. This is the default, stated
+          # because it is the reason there is no CreateNamespace.
+          - CreateNamespace=false

@@ -1,0 +1,43 @@
+# Keep the Route with its environment foundation; the platform Application owns the Gateway.
+# Strip /api for ordering's unprefixed endpoints; other paths go to web, with no delivery backend.
+# Local backends need no ReferenceGrant; cross-namespace parent attachment relies on allowedRoutes.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: cronus-public
+  labels:
+    app.kubernetes.io/part-of: cronus
+    app.kubernetes.io/managed-by: argocd
+    # Identify the Route for operators; attachment checks the namespace's label, not this Route's label.
+    cronus.io/environment: prod
+spec:
+  parentRefs:
+    # The named Gateway authorizes this namespace through allowedRoutes; parentRefs alone grants no access.
+    - name: cronus-prod-gateway
+      namespace: cronus-gateway
+  rules:
+
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      filters:
+        # Replace only the /api prefix so /api/restaurants reaches ordering as /restaurants.
+        # ReplaceFullPath would discard the endpoint suffix.
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: cronus-ordering-service
+          port: 8080
+
+    # Catch unknown client-side paths so the SPA can load its shell.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: cronus-web
+          port: 8080

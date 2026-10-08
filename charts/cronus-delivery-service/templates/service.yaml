@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    {{- include "cronus-delivery-service.labels" . | nindent 4 }}
+spec:
+  # Keep delivery internal; only ordering calls it, and no HTTPRoute exposes it.
+  type: ClusterIP
+  selector:
+    {{- include "cronus-delivery-service.serverSelector" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

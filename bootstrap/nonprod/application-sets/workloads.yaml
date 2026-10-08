@@ -1,0 +1,110 @@
+# Render charts per environment; install this bootstrap manually rather than through Argo.
+# Keep component names explicit so chart-directory renames cannot rename Applications. See README.md, Layout.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cronus-workloads
+  namespace: argocd
+spec:
+  # Go templating, with missingkey=error so that a parameter the generator did not produce fails
+  # loudly. Here that matters more than usual: {{.path.basename}} is used to build the path of a values
+  # file and the name of a Helm release, and an empty value would render a path that does not exist
+  # rather than an obvious error.
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  generators:
+    # A matrix, which is the cross product of the two generators below: every chart in every environment.
+    # A list generator alone could not know about environments, and the directory generator alone cannot
+    # vary the chart, so the Applications have to come from both.
+    - matrix:
+        generators:
+          # Read the same environment directories as the foundation set.
+          # Exclude production below so this installation cannot generate production workloads.
+          - git:
+              repoURL: git@github.com:hashirsarwar/cronus-gitops.git
+              revision: main
+              directories:
+                - path: environments/*
+                - path: environments/*/*
+                  exclude: true
+                # Production excluded, for the same reason as the environments set and with the same
+                # consequence if it were not: this matrix would otherwise generate the production
+                # workloads against the nonprod cluster the moment environments/prod/ existed. See
+                # bootstrap/nonprod/application-sets/environments.yaml for the long version.
+                - path: environments/prod
+                  exclude: true
+
+          # Bind chart and component names explicitly so Application naming stays independent of Helm identity.
+          # Include network policies here so deleted allow rules are pruned instead of remaining active.
+          - list:
+              elements:
+                - app: cronus-ordering-service
+                  component: ordering-service
+                - app: cronus-delivery-service
+                  component: delivery-service
+                - app: cronus-web
+                  component: web
+                - app: cronus-network-policies
+                  component: network-policies
+
+  template:
+    metadata:
+      name: 'cronus-{{.path.basename}}-{{.component}}'
+      labels:
+        app.kubernetes.io/part-of: cronus
+        app.kubernetes.io/managed-by: argocd
+        cronus.io/environment: '{{.path.basename}}'
+    spec:
+      project: cronus-nonprod
+
+      source:
+        repoURL: git@github.com:hashirsarwar/cronus-gitops.git
+        targetRevision: main
+        path: 'charts/{{.app}}'
+        helm:
+          # Keep the existing Helm release name: it is part of the immutable Deployment selector.
+          # Changing it requires replacement and a rollout plan; Application renames must leave it untouched.
+          # See README.md, Renaming an Application does not touch Kubernetes.
+          releaseName: '{{.app}}-cronus-{{.path.basename}}'
+
+          valueFiles:
+            # Argo resolves values paths relative to the chart; environment values override values.yaml.
+            - 'values-{{.path.basename}}.yaml'
+
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: 'cronus-{{.path.basename}}'
+
+      syncPolicy:
+        automated:
+          # A drift from git is corrected rather than reported.
+          selfHeal: true
+
+          # Pruning is ON here, unlike the other two sets, and the difference is what is being pruned.
+          # These Applications own a Deployment, a Service and a migration Job — removing one from git
+          # should remove it from the cluster. The other sets own a Namespace, where the same setting
+          # would delete everything inside it. Nothing here can cascade into their resources, because a
+          # namespace is not part of these charts.
+          prune: true
+
+        # Every sync runs the PreSync migration Job again, including a self-heal caused by something
+        # unrelated, because a hook is a phase of the sync rather than a resource whose diff is compared.
+        # That is why the job has to be safe to run twice, which it is: it applies whatever migrations
+        # are pending and does nothing when there are none.
+        #
+        # The retry is for the one ordering these Applications cannot control. The ServiceAccounts they
+        # name belong to the environment set, and on a fresh cluster the two sets of Applications are
+        # synced in an order Argo does not fix. A sync that starts first fails on a Job whose pod cannot
+        # be created, which is a transient reason, and succeeds on the retry.
+        retry:
+          limit: 5
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 3m
+
+        syncOptions:
+          # The namespace is created by the environment set, so this one must not try to create it and
+          # must not wait on it either.
+          - CreateNamespace=false

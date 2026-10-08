@@ -1,0 +1,14 @@
+# Keep managed Gateways separate: their generated pods omit seccomp and cannot meet Restricted admission.
+# Audit and warn expose the exception; leave the profile version unpinned to follow cluster upgrades.
+# The earlier sync wave creates this namespace before its resources; see README.md, Admission.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cronus-gateway
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  labels:
+    app.kubernetes.io/part-of: cronus
+    app.kubernetes.io/managed-by: argocd
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cronus-web.runtimeConfigName" . }}
+  labels:
+    {{- include "cronus-web.labels" . | nindent 4 }}
+# The file the container serves as /config.js. index.html loads it before the bundle starts, so the
+# application reads its configuration before its first line runs.
+#
+# This exists rather than a build-time variable because one image is promoted from dev to staging
+# unchanged: anything compiled in would be correct for one environment and wrong for the other, and
+# would put an Azure resource identifier in the image. It also replaces the default committed in the
+# image, which enables nothing.
+data:
+  config.js: |
+    window.cronusRuntimeConfig = {
+    {{- with .Values.telemetry.connectionString }}
+      applicationInsightsConnectionString: {{ . | quote }},
+    {{- end }}
+    };

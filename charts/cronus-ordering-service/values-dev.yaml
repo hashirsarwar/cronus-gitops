@@ -1,0 +1,37 @@
+# The dev environment for the ordering service.
+#
+# Only what differs from values.yaml appears here: which database this service uses, and which pair
+# of PostgreSQL roles the Deployment and the migration job authenticate as. Those roles exist in
+# cronus_dev_ordering and nowhere else, which is what confines this environment's identity to its own
+# database.
+
+# One replica, inherited from values.yaml rather than restated here, and that is the cost decision for
+# this environment: three extra replicas across three workloads buys availability a dev environment does
+# not need. What it does keep is everything the chart sets: the rollout policy from the chart's
+# values.yaml, maxUnavailable: 0 with maxSurge: 1, so a deploy still replaces the pod without a gap in
+# service even at one replica; and both topology spread constraints, which cost nothing here because
+# there is nothing to spread. What it cannot survive is the loss of the node, which is why staging is
+# the environment that demonstrates availability.
+#
+# Neither the rollout policy nor the spread constraints are restated in this file. Dev and staging use
+# the same values for both, so they are stated once in the chart's values.yaml; a production values file
+# is where they would diverge, and `deployment.rollingUpdate` and `topologySpread` are the two fields it
+# would set.
+
+image:
+  # Use the full commit SHA published by CI so the deployed build is traceable.
+  # The template requires an explicit tag and cannot silently fall back to latest.
+  tag: "780d7a20180026001b2725c18ef600eba77c82c3"
+
+database:
+  host: psql-cronus-nonprod.postgres.database.azure.com
+  name: cronus_dev_ordering
+  username: id-ordering-dev
+
+migration:
+  username: id-ordering-migrations-dev
+
+telemetry:
+  # Use the real ordering_dev connection string from nonprod Terraform outputs.
+  # An empty value disables telemetry; a malformed placeholder can prevent start-up.
+  connectionString: "InstrumentationKey=fddc5248-1072-4ef9-add9-136c406ba538;IngestionEndpoint=https://uksouth-1.in.applicationinsights.azure.com/;LiveEndpoint=https://uksouth.livediagnostics.monitor.azure.com/;ApplicationId=9e6d808f-f029-40cf-b6ad-fe0f014c174a"

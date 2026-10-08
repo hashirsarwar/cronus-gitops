@@ -1,0 +1,84 @@
+# Install manually; foundation owns the Gateway namespace and policies, while each environment owns a Gateway.
+# Keep the Gateway list explicit because adding one provisions a public address. See README.md, Layout.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cronus-prod-platform
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  # Preserve resources when generated Applications disappear or are renamed.
+  # They become unmanaged until the Application is restored; deleting them must be a separate decision.
+  syncPolicy:
+    preserveResourcesOnDeletion: true
+
+  generators:
+    - list:
+        elements:
+          # The namespace and the policies that belong to the namespace itself rather than to whichever
+          # Gateway sits in it. Not an environment, which is why it points at `foundation/` and why its name
+          # is not environment-first: `cronus-platform-gateway` says what it is.
+          #
+          # The name is the same as the nonprod installation's, because it manages the same objects — the
+          # same namespace name, the same policies — in a different cluster. Argo tracks objects per
+          # cluster, so there is nothing for the two to collide over.
+          - name: cronus-platform-gateway
+            path: platform/gateway/foundation
+            namespace: cronus-gateway
+
+          # Production's Gateway. Named for the environment it faces, because that is what it is: the way in
+          # from outside for exactly one environment, with a listener that admits only that environment's
+          # routes.
+          - name: cronus-prod-gateway
+            path: platform/gateway/environments/prod
+            namespace: cronus-gateway
+
+  template:
+    metadata:
+      name: '{{.name}}'
+      labels:
+        app.kubernetes.io/part-of: cronus
+        app.kubernetes.io/managed-by: argocd
+    spec:
+      project: cronus-prod
+      source:
+        repoURL: git@github.com:hashirsarwar/cronus-gitops.git
+        targetRevision: main
+        path: '{{.path}}'
+        directory:
+          recurse: false
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{.namespace}}'
+
+      syncPolicy:
+        automated:
+          selfHeal: true
+          # Off, unlike the workloads set. Both objects here are ones whose absence is not obvious until
+          # somebody tries to reach the site, and a Gateway removed is an address given up. Removing the
+          # Gateway is then a deliberate act — delete the manifest *and* the Application — rather than the
+          # consequence of an edit to this file.
+          prune: false
+
+        # The one ordering these two Applications cannot control. The Gateway needs the `cronus-gateway`
+        # namespace, which the foundation Application creates, and on a fresh cluster Argo synced them in an
+        # order it does not fix: a sync that starts first fails with "namespaces \"cronus-gateway\" not
+        # found", which is a transient reason, and succeeds on the retry.
+        #
+        # The nonprod platform set does not carry this, and it converges anyway — an out-of-sync Application
+        # is re-evaluated on the controller's periodic resync, so the retry only decides whether that takes
+        # seconds or minutes. Production states it rather than relying on it, which is the same choice the
+        # workloads set makes for the same class of dependency.
+        retry:
+          limit: 5
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 3m
+
+        syncOptions:
+          # The namespace is created by the foundation element inside this set rather than by Argo's
+          # namespace creation, so neither Application may try to create it or wait on it.
+          - CreateNamespace=false

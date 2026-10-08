@@ -1,0 +1,50 @@
+# Keep environment overrides in values-<environment>.yaml.
+# The shared image uses Gateway API routing and mounted runtime config.
+
+image:
+  repository: acrcronusnonprod.azurecr.io/cronus-web
+  # The tag of the build being deployed. Set per environment to the full Git commit SHA that CI
+  # pushed. Left empty here, and required by the template, so that a deployment can never fall back
+  # to a moving tag such as `latest`.
+  tag: ""
+  # An optional digest to pull by instead of the tag, which is what production uses: a digest cannot
+  # be repointed, while a tag is a label a push can move. Left empty here, so dev and staging pull
+  # by tag exactly as they did before this value existed. See the helper that renders the reference.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# Dev uses one replica; staging and production override the count.
+# Render PDBs only above one replica so voluntary node drains cannot be blocked indefinitely.
+replicaCount: 1
+
+# Requests only for CPU: a CPU limit would throttle the process during a burst the node could
+# comfortably absorb, and the request is what the scheduler needs. Memory is limited so that a leak
+# restarts the pod instead of degrading the node it shares.
+resources:
+  requests:
+    cpu: 50m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+# Keep existing capacity until replacement pods are Ready; reserve room for one surge pod.
+# Percentage maxUnavailable rounds down and maxSurge rounds up; check small replica counts.
+# PDBs do not govern rollouts. See README.md, The rolling update.
+deployment:
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+# Prefer even zone and host placement with ScheduleAnyway rather than blocking replicas.
+# Enable both now so added nodes can be used without a template change; neither has priority by list order.
+# See README.md, Topology spread, for capacity limits and selector scope.
+topologySpread:
+  zone:
+    enabled: true
+  hostname:
+    enabled: true
+
+telemetry:
+  # Set the real connection string per environment; empty disables telemetry.
+  # Malformed placeholders can prevent start-up. Read application_insights_connection_strings from Terraform outputs.
+  connectionString: ""

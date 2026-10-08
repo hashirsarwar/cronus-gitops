@@ -1,0 +1,82 @@
+# Install manually to keep recovery independent of Argo reconciliation.
+# Keep production and nonprod generator paths disjoint; workload syncs retry until foundations exist.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cronus-prod-environments
+  namespace: argocd
+spec:
+  # The nonprod set's long explanation of goTemplate and missingkey=error applies unchanged: a reference
+  # to a parameter the generator did not produce should fail loudly rather than render an empty string,
+  # because an Application pointed at an empty path syncs nothing and looks healthy.
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  # Preserve resources when generated Applications disappear or are renamed.
+  # They become unmanaged until the Application is restored; deleting them must be a separate decision.
+  syncPolicy:
+    preserveResourcesOnDeletion: true
+
+  generators:
+    - git:
+        # SSH rather than HTTPS because the credential is a read-only deploy key. Production has its own
+        # key pair rather than sharing nonprod's: GitHub allows a given public key on a repository once, so
+        # a second installation means a second key — and two keys means either cluster's credential can be
+        # revoked without disturbing the other.
+        #
+        # The URL still has to match the repository Secret install.sh creates, and the AppProject's
+        # sourceRepos. It is written three times and nothing joins them automatically, so a disagreement
+        # shows up as "repository not permitted" or as every Application sitting in an authentication
+        # error, depending on which one differs.
+        repoURL: git@github.com:hashirsarwar/cronus-gitops.git
+        revision: main
+        directories:
+          - path: environments/prod
+
+  template:
+    metadata:
+      # The same naming convention as every other environment, so `argocd app list` on the production
+      # cluster groups and sorts the way it does on the nonprod one: environment first, then the role the
+      # Application plays in it.
+      name: 'cronus-{{.path.basename}}-foundation'
+      labels:
+        app.kubernetes.io/part-of: cronus
+        app.kubernetes.io/managed-by: argocd
+        cronus.io/environment: '{{.path.basename}}'
+    spec:
+      project: cronus-prod
+
+      source:
+        repoURL: git@github.com:hashirsarwar/cronus-gitops.git
+        targetRevision: main
+        path: '{{.path.path}}'
+        directory:
+          # The environment directory is flat: the manifests in it are the environment.
+          recurse: false
+
+      destination:
+        # The cluster Argo runs in, addressed by its in-cluster service. Production's Argo deploys into
+        # production's cluster and nothing else; there is no remote destination in this repository.
+        server: https://kubernetes.default.svc
+        namespace: 'cronus-{{.path.basename}}'
+
+      syncPolicy:
+        automated:
+          # A drift from git is corrected rather than reported. Nothing in this directory is written by
+          # hand, so there is no legitimate local change for it to fight.
+          selfHeal: true
+
+          # Pruning is off, for the reason the nonprod set gives and one more. The cost of having it off is
+          # that removing a file from this directory leaves its object behind; the cost of having it on is
+          # that a file removed by accident — or a directory renamed in a moment of tidying — deletes a
+          # Namespace and everything inside it. On production the asymmetry is not close.
+          #
+          # Note what this does *not* mean: `preserveResourcesOnDeletion` above and `prune: false` here
+          # cover different events. Pruning is a change within a sync, driven by a diff. Preserving is the
+          # deletion of the Application itself. Production has both off.
+          prune: false
+
+        syncOptions:
+          # The Namespace is a manifest in this directory rather than something Argo creates as a side
+          # effect, so that it is visible, reviewable and labelled like everything else.
+          - CreateNamespace=false

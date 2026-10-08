@@ -1,0 +1,17 @@
+# Keep the ingress matrix explicit in templates/networkpolicies.yaml so security grants are reviewable.
+
+# Keep this port aligned with workload Services and Gateway backends so ingress allowances match traffic.
+workloadPort: 8080
+
+gateway:
+  # All three environments have Gateways; enable their ingress allowances by default.
+  # Disable only where no Gateway should reach web or ordering.
+  enabled: true
+
+  # Select the Gateway's platform namespace by its API-managed metadata.name label.
+  # Managed Gateway pods cannot meet Restricted admission, so they live outside workload namespaces.
+  namespace: cronus-gateway
+
+  # Require the environment's Gateway name; namespace alone cannot distinguish shared-platform Gateways.
+  # Combined namespace and pod selectors admit only that Gateway's data plane.
+  # Match metadata.name in platform/gateway/environments/<environment>/gateway.yaml; no safe default exists.

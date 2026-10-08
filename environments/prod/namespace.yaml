@@ -1,0 +1,18 @@
+# Keep production workloads separate from the managed Gateway, whose pods cannot meet Restricted admission.
+# Enforce Restricted at the cluster's current profile; the earlier sync wave creates the namespace first.
+# Production bootstrap owns this foundation and excludes dev/staging paths.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cronus-prod
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  labels:
+    app.kubernetes.io/part-of: cronus
+    app.kubernetes.io/managed-by: argocd
+    # The Gateway's allowedRoutes selector checks this namespace label to admit production Routes.
+    cronus.io/environment: prod
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

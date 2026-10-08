@@ -1,0 +1,28 @@
+# The staging environment for the delivery service.
+#
+# Identical in shape to values-dev.yaml and different in every value that matters: a different
+# database and a different pair of roles. Nothing here can reach the dev database, because neither
+# role it names exists there.
+
+# Two replicas support availability during rollouts and voluntary disruptions.
+# Both can still share one worker node; spreading is a preference, not node-failure protection.
+# The chart supplies rollout and topology defaults; see README.md, Resilience.
+
+replicaCount: 2
+image:
+  # Use the full commit SHA published by CI so the deployed build is traceable.
+  # The template requires an explicit tag and cannot silently fall back to latest.
+  tag: "9d31ca4649c12e7bfd741cad16b7ea784dfc3a6a"
+
+database:
+  host: psql-cronus-nonprod.postgres.database.azure.com
+  name: cronus_staging_delivery
+  username: id-delivery-staging
+
+migration:
+  username: id-delivery-migrations-staging
+
+telemetry:
+  # Use the real delivery_staging connection string from nonprod Terraform outputs.
+  # An empty value disables telemetry; a malformed placeholder can prevent start-up.
+  connectionString: "InstrumentationKey=1ce83b47-bd3a-4756-b12e-b94f3ddac765;IngestionEndpoint=https://uksouth-1.in.applicationinsights.azure.com/;LiveEndpoint=https://uksouth.livediagnostics.monitor.azure.com/;ApplicationId=bd495406-71a6-4f37-902c-c446e1127f84"

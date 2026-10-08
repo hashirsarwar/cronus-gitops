@@ -1,0 +1,54 @@
+# Keep delivery internal in production too: only ordering calls it and no HTTPRoute exposes it.
+
+# Match ordering's capacity baseline; preferred spreading is not guaranteed node or zone redundancy.
+# See cronus-ordering-service/values-prod.yaml for placement limits.
+replicaCount: 3
+
+image:
+  # Production's own registry. See "How images reach production" in README.md.
+  repository: acrcronusprod.azurecr.io/cronus-delivery-service
+
+  # Keep the promoted full commit SHA beside its digest so release diffs identify the source build.
+  # Take both values from the promotion run summary; the template rejects an unset tag.
+  tag: "9d31ca4649c12e7bfd741cad16b7ea784dfc3a6a"
+
+  # Pull by digest so a repointed tag cannot change the deployed bytes.
+  # Promotion verifies the source and destination digests; this is not signed build-provenance verification.
+  digest: "sha256:ef59a42e39bc403a75319ef3c67649c6206d6b21bd3b27017c4eecc4194191dc"
+
+database:
+  host: psql-cronus-prod.postgres.database.azure.com
+  name: cronus_prod_delivery
+  # The runtime role: read and write rows, no schema changes.
+  username: id-delivery-prod
+
+migration:
+  # The PreSync job's role, which may create and alter tables. Separate from the one above, and separate
+  # from ordering's, because the PostgreSQL boundary is per database as well as per role.
+  username: id-delivery-migrations-prod
+
+deployment:
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+topologySpread:
+  zone:
+    enabled: true
+  hostname:
+    enabled: true
+
+resources:
+  # The chart's defaults, restated so production's ask is readable in one file.
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    memory: 384Mi
+
+telemetry:
+  # Production's own Application Insights resource, storing into the production Log Analytics workspace.
+  #
+  #   cd cronus-infrastructure/environments/prod
+  #   terraform output -json application_insights_connection_strings | jq -r '.delivery_prod'
+  connectionString: "InstrumentationKey=f7764ad0-aa81-4fa7-a45c-8a0d6b65ee07;IngestionEndpoint=https://uksouth-1.in.applicationinsights.azure.com/;LiveEndpoint=https://uksouth.livediagnostics.monitor.azure.com/;ApplicationId=104c2892-9453-42d4-86af-44cf67d634f0"

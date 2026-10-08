@@ -1,0 +1,7 @@
+apiVersion: v2
+name: cronus-network-policies
+description: The ingress policy matrix for one Cronus environment — default deny, and the rules that open it again.
+type: application
+# The version of this chart's templates. There is no application version: this chart ships no image,
+# so there is nothing for an appVersion to track.
+version: 0.1.0

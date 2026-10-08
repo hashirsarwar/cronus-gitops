@@ -1,0 +1,49 @@
+# Values for the argo-cd chart, for the installation that runs on the production cluster.
+#
+# The three decisions below are the same three the nonprod installation makes, and for the same reasons —
+# see bootstrap/nonprod/values.yaml, which states the reasoning in full. They are repeated here rather
+# than referenced because this file is what install.sh renders and what an operator reads when the
+# production Argo behaves in a way they did not expect: a values file that has to be read beside another
+# one is a values file that will be read without it.
+#
+# Only what differs from the chart's defaults is set, so this reads as a list of decisions.
+#
+# The deploy key is deliberately NOT here, as it is not there. configs.repositories would work, and it
+# would put a private SSH key into a file that lives in git. The credential is a Secret in the cluster
+# instead, created by install.sh from a key file that is never committed.
+
+dex:
+  # Nothing authenticates through Argo's bundled SSO provider: there is no identity provider wired up, so
+  # leaving it enabled would run a component that serves nothing. Argo's own admin account stays enabled,
+  # which is what makes this safe. Re-enable this when Entra ID sign-in is configured.
+  enabled: false
+
+notifications:
+  # No Slack, email or webhook is configured, so this would run a controller with nowhere to send
+  # anything. Worth turning on deliberately when there is somewhere for the messages to go — on a
+  # production cluster a failing sync is more worth being told about than it is on a development one, and
+  # that is an argument for configuring a receiver rather than an argument for running the controller
+  # without one.
+  enabled: false
+
+server:
+  service:
+    # ClusterIP, stated so that it stays a decision rather than becoming a default nobody looked at.
+    #
+    # **On production this is not the same situation it is on nonprod, and the difference is worth
+    # knowing before someone goes looking for the UI.** The nonprod cluster's API server is public and
+    # restricted to a set of addresses, so `kubectl port-forward svc/argocd-server` from a laptop works.
+    # This cluster's API server is private: there is no route to it from outside its virtual network, so
+    # nothing can port-forward to it either, and the Argo CD UI is not reachable by any path that exists
+    # today.
+    #
+    # That is acceptable rather than broken. Argo CD does not need to be reachable — it needs to reach
+    # out, to GitHub over the cluster's NAT gateway, and it does that. Routine work is reading an
+    # Application's status with `kubectl`, which `az aks command invoke` runs without any network path to
+    # the cluster; bootstrap/prod/README.md has the commands.
+    #
+    # What would change it is network access to the production virtual network — a jump host, Bastion, or
+    # VPN — which is the same prerequisite the production database bootstrap has, and the same decision.
+    # Publishing the UI through a Gateway is the other route and is deliberately closed: production has no
+    # public edge yet, and an admin interface is not the first thing to put behind one.
+    type: ClusterIP

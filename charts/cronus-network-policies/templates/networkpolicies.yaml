@@ -1,0 +1,106 @@
+{{- /*
+Default-deny ingress only; egress stays unrestricted. Only ordering in this namespace may reach delivery.
+Gateway namespace and pod selectors in the same from entry are ANDed, admitting only this environment's data plane.
+All environments enable Gateway rules; see README.md, Network policies, for the full ingress matrix.
+*/}}
+
+{{- /*
+Apply the deny to every pod, then keep each explicit ingress allowance independently reviewable.
+Do not add Egress here: that would change the intended ingress-only boundary.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  labels:
+    {{- include "cronus-network-policies.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+{{- if .Values.gateway.enabled }}
+---
+{{- /*
+Select serving pods, excluding migration/seed Jobs; the policy namespace supplies the environment boundary.
+Gateway data-plane policies belong to platform/gateway/foundation, outside this workload chart.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-to-web
+  labels:
+    {{- include "cronus-network-policies.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cronus-web
+      app.kubernetes.io/component: server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.gateway.namespace }}
+          podSelector:
+            matchLabels:
+              gateway.networking.k8s.io/gateway-name: {{ required "gateway.podName is required whenever gateway.enabled is true: it is the only thing that separates this environment's Gateway from another environment's in the shared platform namespace" .Values.gateway.podName | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.workloadPort }}
+---
+{{- /*
+Expose ordering through this environment's Gateway because /api is routed directly to it.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-to-ordering
+  labels:
+    {{- include "cronus-network-policies.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cronus-ordering-service
+      app.kubernetes.io/component: server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.gateway.namespace }}
+          podSelector:
+            matchLabels:
+              gateway.networking.k8s.io/gateway-name: {{ required "gateway.podName is required whenever gateway.enabled is true: it is the only thing that separates this environment's Gateway from another environment's in the shared platform namespace" .Values.gateway.podName | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.workloadPort }}
+{{- end }}
+---
+{{- /*
+Admit delivery traffic only from ordering's serving pods in this namespace, on the workload port.
+Neither the Gateway nor web receives a delivery allowance.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ordering-to-delivery
+  labels:
+    {{- include "cronus-network-policies.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cronus-delivery-service
+      app.kubernetes.io/component: server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cronus-ordering-service
+              app.kubernetes.io/component: server
+      ports:
+        - protocol: TCP
+          port: {{ .Values.workloadPort }}

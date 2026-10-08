@@ -1,0 +1,71 @@
+# Use production's registry, database and identities with the same workload chart as dev/staging.
+
+# Three replicas prefer separate hosts; loss of one host leaves two only when placement achieves that spread.
+# Across two zones, a 2/1 split loses two replicas if the larger zone fails.
+# PDBs limit voluntary disruptions and cannot prevent node failures.
+replicaCount: 3
+
+image:
+  # Production's own registry, not nonprod's. The image is the same build, copied here from the nonprod
+  # registry by the promotion workflow under production's own identity; see "How images reach production"
+  # in README.md. Nothing pulls across registries, so an image can only reach production by having been
+  # deliberately promoted into it.
+  repository: acrcronusprod.azurecr.io/cronus-ordering-service
+
+  # Keep the promoted full commit SHA beside its digest so release diffs identify the source build.
+  # Take both values from the promotion run summary; the template rejects an unset tag.
+  tag: "780d7a20180026001b2725c18ef600eba77c82c3"
+
+  # Pull by digest so a repointed tag cannot change the deployed bytes.
+  # Promotion verifies the source and destination digests; this is not signed build-provenance verification.
+  digest: "sha256:360b3d1876f8e45f1770708192b6c772887d4d6fffbe110a7fa896c5080eea2a"
+
+database:
+  # The production server, which is a different server from nonprod's and is reachable only from inside
+  # its own virtual network.
+  host: psql-cronus-prod.postgres.database.azure.com
+  name: cronus_prod_ordering
+  # The role the service authenticates as, which may read and write rows and may not change the schema.
+  # The name is the production managed identity's display name, because that is how the bootstrap in
+  # cronus-infrastructure creates the PostgreSQL principal: one name, traceable from Entra through
+  # `pg_stat_activity` without a lookup table in between.
+  username: id-ordering-prod
+
+migration:
+  # The role the PreSync job authenticates as. It may create and alter tables, and the runtime role
+  # above may not — which is the whole reason the two ServiceAccounts exist rather than one.
+  username: id-ordering-migrations-prod
+
+seed:
+  # Keep sample seeding opt-in so a production sync cannot silently introduce demo catalogue data.
+  enabled: false
+
+# Keep existing capacity until replacement pods are Ready; reserve room for a surge pod.
+# If capacity is exhausted, the user pool may need to scale before the rollout can progress.
+deployment:
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+# Prefer both zone and host spreading without blocking replicas when capacity is limited.
+# Constraint list order does not prioritize zone over hostname.
+topologySpread:
+  zone:
+    enabled: true
+  hostname:
+    enabled: true
+
+resources:
+  # Request memory above measured steady state; limit memory to protect shared nodes.
+  # Avoid CPU limits so available node capacity can absorb bursts.
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    memory: 384Mi
+
+telemetry:
+  # Use production's telemetry resource so observations stay in its workspace.
+  # Read ordering_prod from production application_insights_connection_strings outputs.
+  # The connection string enables ingestion, not data reads; malformed placeholders can prevent start-up.
+  connectionString: "InstrumentationKey=0006e614-2ef9-4750-afdd-94b6e2202716;IngestionEndpoint=https://uksouth-1.in.applicationinsights.azure.com/;LiveEndpoint=https://uksouth.livediagnostics.monitor.azure.com/;ApplicationId=3b2e44e8-b7cb-4503-9662-ca851996a0a1"

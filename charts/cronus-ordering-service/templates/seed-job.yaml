@@ -1,0 +1,66 @@
+{{- if .Values.seed.enabled }}
+# Keep seeding opt-in and outside Argo hooks so sample data is never introduced by a routine sync.
+# Apply the job by hand as described in README.md, Giving an environment a catalogue.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Chart.Name }}-seed
+  labels:
+    {{- include "cronus-ordering-service.labels" . | nindent 4 }}
+spec:
+  # Seeding is idempotent, so retrying a transient failure is worth doing. A real error fails the same
+  # way every time, so the limit stays small rather than retrying for minutes.
+  backoffLimit: 2
+  # Bounds a seed that hangs, so the operator is not left waiting on a job that will never finish.
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        {{- include "cronus-ordering-service.labels" . | nindent 8 }}
+        # Marked as its own component for the same reason the migration job is: these pods must not be
+        # selected by the Service, which selects on `component: server`.
+        app.kubernetes.io/component: seed
+        azure.workload.identity/use: "true"
+    spec:
+      # The service's own identity, not the migration one. Seeding writes rows, which is exactly what
+      # that role may do, and it has no reason to hold the privileges that alter a schema.
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      restartPolicy: Never
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: seed
+          image: {{ include "cronus-ordering-service.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Selects the seeding mode in Program.cs: the catalogue is written if it is empty, then the
+          # process exits. It exits non-zero if it could not be written.
+          args:
+            - seed
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            # The runtime role, because seeding is a data change. It uses the same connection string
+            # the Deployment does, so the identity is one the environment already has.
+            - name: ConnectionStrings__{{ .Values.database.connectionStringName }}
+              value: {{ include "cronus-ordering-service.connectionString" .Values.database | quote }}
+            # Use writable /tmp for runtime sockets on the read-only root filesystem.
+            # No telemetry connection string is supplied, so there is no exporter offline queue.
+            - name: TMPDIR
+              value: /tmp
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            # The same block the Deployment uses; see the note in migration-job.yaml.
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            # Seeding writes rows and nothing else, so nothing under / is written here either.
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

@@ -1,0 +1,26 @@
+# Use a dedicated staging Gateway so its public address and route-attachment boundary remain independent.
+# Keep managed data-plane pods outside Restricted workload namespaces; see platform/gateway/foundation/namespace.yaml.
+# The add-on owns the load balancer; this listener is HTTP only until DNS/TLS are configured.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: cronus-staging-gateway
+  labels:
+    app.kubernetes.io/part-of: cronus
+    app.kubernetes.io/managed-by: argocd
+    # Identify the Gateway for operators; listener attachment checks namespace labels below.
+    cronus.io/environment: staging
+spec:
+  gatewayClassName: approuting-istio
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      # Authorize only staging-labelled namespaces; All would allow other environments' Routes to attach.
+      # Cross-namespace attachment uses allowedRoutes, not a ReferenceGrant.
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              cronus.io/environment: staging

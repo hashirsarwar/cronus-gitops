@@ -1,0 +1,42 @@
+# Promote the shared nginx image unchanged; runtime config supplies production telemetry.
+# GitOps declares HTTP routing and production Terraform admits port 80; DNS and TLS remain deferred.
+
+# Three replicas, as for the two services. The web application is the cheapest thing here to run and the
+# most visible thing to lose: it is the shell document and its assets, and it is what a user's browser
+# reaches first.
+replicaCount: 3
+
+image:
+  repository: acrcronusprod.azurecr.io/cronus-web
+
+  # Keep the promoted full commit SHA beside its digest so release diffs identify the source build.
+  # Take both values from the promotion run summary; the template rejects an unset tag.
+  tag: "73be6893f2ac19d54b36ad958a89947d6c2b1e4c"
+
+  # Pull by digest so a repointed tag cannot change the deployed bytes.
+  # Promotion verifies the source and destination digests; this is not signed build-provenance verification.
+  digest: "sha256:6dfdf7f29c49a7359c958a4531ca23fba22afd4111e656a845cf8f64e6367a8f"
+
+deployment:
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+topologySpread:
+  zone:
+    enabled: true
+  hostname:
+    enabled: true
+
+resources:
+  # nginx serving static files. The chart's defaults, restated.
+  requests:
+    cpu: 50m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+telemetry:
+  # Supply web_prod from production application_insights_connection_strings outputs.
+  # The browser receives this ingestion-only configuration through /config.js; it grants no telemetry read access.
+  connectionString: "InstrumentationKey=7f8c1996-9c48-47e1-8e72-692dc953ba50;IngestionEndpoint=https://uksouth-1.in.applicationinsights.azure.com/;LiveEndpoint=https://uksouth.livediagnostics.monitor.azure.com/;ApplicationId=ff4acee9-34c2-469a-b671-ddf5eaf2dece"

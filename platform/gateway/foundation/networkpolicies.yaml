@@ -1,0 +1,40 @@
+# Default-deny ingress, then admit managed GatewayClass pods so the front doors remain reachable.
+# The exemption covers every approuting-istio Gateway in this namespace; workload-side allowances stay per environment.
+# See README.md, Network policies, for the boundary and selectors.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  labels:
+    app.kubernetes.io/part-of: cronus
+    app.kubernetes.io/managed-by: argocd
+spec:
+  # Empty, so this is every pod in the namespace. Listing only Ingress in policyTypes is what leaves
+  # egress alone: a policy naming both would deny both, and there is no default-deny egress here.
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-data-plane-ingress
+  labels:
+    app.kubernetes.io/part-of: cronus
+    app.kubernetes.io/managed-by: argocd
+spec:
+  podSelector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-class-name: approuting-istio
+  policyTypes:
+    - Ingress
+  ingress:
+    # An empty rule matches every source and every port, which is what keeps the front doors open. The
+    # traffic reaching these pods arrives from outside the cluster, so the rule that keeps them working
+    # is an allow from any source, and it is the one place in this repository that matches everything on
+    # purpose.
+    #
+    # Not narrowed to a port list: a Gateway serves public HTTP on 80 and is health-probed on 15021, and
+    # naming a subset of those is a way to take the site down by omission — including by naming a port a
+    # future AKS release stops using.
+    - {}
